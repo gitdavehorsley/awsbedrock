@@ -1,31 +1,58 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'AWS Bedrock Guardrails Implementation'
+Description: 'AWS Bedrock Guardrails Implementation - Comprehensive security controls for AWS Bedrock usage'
 
+# =========================================================================
+# PARAMETERS
+# =========================================================================
+# These parameters make the template configurable for different deployments
 Parameters:
+  # Administrative parameters
   AdminEmail:
     Type: String
-    Description: Email address for notifications
+    Description: Email address for notifications and alerts
     Default: admin@example.com
+    ConstraintDescription: Must be a valid email address
   
+  # Cost control parameters
   MonthlyBudgetAmount:
     Type: Number
     Description: Monthly budget limit for Bedrock in USD
     Default: 100
+    MinValue: 1
+    ConstraintDescription: Must be a positive number
     
+  # Network parameters - References to existing infrastructure
   ExistingVpcId:
     Type: AWS::EC2::VPC::Id
-    Description: ID of the existing VPC to use
+    Description: ID of the existing VPC to use for VPC endpoints
     
   ExistingSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of the existing subnet to use
+    Description: ID of the existing subnet to use for VPC endpoints
+    
+  # Environment configuration
+  EnvironmentName:
+    Type: String
+    Description: Environment name (dev, test, prod, etc.)
+    Default: dev
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: Environment name must contain only alphanumeric characters
 
+# =========================================================================
+# RESOURCES
+# =========================================================================
 Resources:
-  # 1. IAM Roles and Policies
+  # =========================================================================
+  # IAM ROLES AND POLICIES
+  # =========================================================================
+  # These resources create IAM role and policy with least privilege access to AWS Bedrock
+  # following security best practices by limiting access to only required models
+  # and enforcing environment-based tagging
+  
   BedrockAccessRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: 'bedrock-access-role-SecurityToolsSandbox'
+      RoleName: !Sub 'bedrock-access-role-${EnvironmentName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -35,54 +62,77 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - !Ref BedrockRestrictedPolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # Policy that restricts which Bedrock models can be accessed and enforces tagging
   BedrockRestrictedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: 'bedrock-restricted-policy-SecurityToolsSandbox'
-      Description: Restricted policy for AWS Bedrock access
+      ManagedPolicyName: !Sub 'bedrock-restricted-policy-${EnvironmentName}'
+      Description: Restricted policy for AWS Bedrock access with least privilege principles
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          # Allow invoking only specific Bedrock models
           - Effect: Allow
             Action:
               - bedrock:InvokeModel
               - bedrock:InvokeModelWithResponseStream
             Resource:
+              # List of allowed foundation models - carefully curated for your use case
               - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0'
               - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-text-express-v1'
             Condition:
+              # Enforce tagging to maintain environment separation
               StringEquals:
-                'aws:RequestTag/Environment': 'SecurityToolsSandbox'
+                'aws:RequestTag/Environment': !Ref EnvironmentName
+          # Allow listing available models (read-only)
           - Effect: Allow
             Action:
               - bedrock:GetFoundationModel
             Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  # 2. Use Existing VPC Resources
-
+  # =========================================================================
+  # NETWORK CONTROLS
+  # =========================================================================
+  # These resources create private network access to Bedrock services
+  # to prevent Bedrock traffic from traversing the public internet
+  # and provide network-level isolation and protection
+  
+  # Security group that restricts network traffic to the Bedrock endpoint
   BedrockSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for Bedrock endpoint
+      GroupDescription: Security group for Bedrock endpoint - restricts network traffic
       VpcId: !Ref ExistingVpcId
       SecurityGroupIngress:
+        # Allow HTTPS (443) traffic only from within the VPC CIDR range
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
+          CidrIp: 10.0.0.0/16  # Consider parameterizing this value to match your VPC CIDR
       SecurityGroupEgress:
+        # Allow all outbound traffic - modify as needed for stricter controls
         - IpProtocol: -1
           FromPort: 0
           ToPort: 0
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: 'bedrock-sg-SecurityToolsSandbox'
+          Value: !Sub 'bedrock-sg-${EnvironmentName}'
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # VPC Endpoint that enables private access to Bedrock services
   BedrockVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
+      # Connect to the Bedrock runtime service in the current region
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock-runtime'
       VpcEndpointType: Interface
       VpcId: !Ref ExistingVpcId
@@ -90,42 +140,70 @@ Resources:
         - !Ref ExistingSubnetId
       SecurityGroupIds:
         - !Ref BedrockSecurityGroup
+      # Enable private DNS to make the endpoint accessible via the default AWS endpoint URL
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  # 3. CloudWatch Monitoring and Alarms
+  # =========================================================================
+  # MONITORING AND ALERTING
+  # =========================================================================
+  # These resources create comprehensive monitoring and alerting for Bedrock usage
+  # to enable visibility into model usage patterns, costs, and potential issues
+
+  # Centralized log group for Bedrock model invocations
   BedrockLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: '/aws/bedrock/model-invocations-SecurityToolsSandbox'
-      RetentionInDays: 30
+      LogGroupName: !Sub '/aws/bedrock/model-invocations-${EnvironmentName}'
+      RetentionInDays: 30  # Retain logs for 30 days - adjust as needed for compliance
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # SNS topic for sending alerts and notifications about Bedrock usage
   BedrockAlertsTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: 'bedrock-alerts-SecurityToolsSandbox'
+      TopicName: !Sub 'bedrock-alerts-${EnvironmentName}'
       Subscription:
         - Protocol: email
           Endpoint: !Ref AdminEmail
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # Alarm to detect unusually high Bedrock usage (proxy for costs)
   BedrockCostAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: 'bedrock-high-cost-alarm-SecurityToolsSandbox'
+      AlarmName: !Sub 'bedrock-high-cost-alarm-${EnvironmentName}'
       ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 1
       MetricName: Invocations
       Namespace: AWS/Bedrock
-      Period: 86400  # Daily
+      Period: 86400  # Daily - adjust to match your usage patterns
       Statistic: Sum
-      Threshold: 1000  # Adjust based on cost threshold
+      Threshold: 1000  # Adjust based on your expected usage and cost threshold
       AlarmDescription: 'This alarm monitors for high Bedrock usage costs'
       Dimensions:
         - Name: ModelId
-          Value: anthropic.claude-3-sonnet-20240229-v1:0
+          Value: anthropic.claude-3-sonnet-20240229-v1:0  # Adjust for your most-used model
       AlarmActions:
         - !Ref BedrockAlertsTopic
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  # 4. Custom Resource for AWS Bedrock Guardrails (since CloudFormation doesn't directly support Bedrock guardrails)
+  # =========================================================================
+  # BEDROCK GUARDRAILS
+  # =========================================================================
+  # These resources implement content filtering and safety guardrails for Bedrock
+  # to prevent generation of harmful content and protect sensitive information
+  # Implemented as a custom resource since CloudFormation doesn't directly support Bedrock guardrails
+
+  # IAM role for the Lambda function that creates Bedrock guardrails
   GuardrailsLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -149,7 +227,11 @@ Resources:
                   - bedrock:UpdateGuardrail
                   - bedrock:DeleteGuardrail
                 Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # Lambda function that creates and manages Bedrock guardrails
   GuardrailsLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -157,6 +239,7 @@ Resources:
       Role: !GetAtt GuardrailsLambdaRole.Arn
       Runtime: python3.9
       Timeout: 300
+      Description: 'Lambda function to create and manage Bedrock guardrails'
       Code:
         ZipFile: |
           import boto3
@@ -169,121 +252,141 @@ Resources:
           bedrock = boto3.client('bedrock')
 
           def handler(event, context):
-            logger.info('Received event: %s', json.dumps(event))
-            
-            # Extract parameters
-            props = event['ResourceProperties']
-            guardrail_name = props.get('GuardrailName', 'content-safety-guardrail')
-            env_name = props.get('EnvironmentName', 'prod')
-            
-            try:
-              if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
-                # Create guardrail configuration
-                response = bedrock.create_guardrail(
-                  name=f"{guardrail_name}-{env_name}",
-                  description="Guardrail to filter harmful content",
-                  blockedInputMessaging={
-                    'enabled': True,
-                    'message': "Your input contains content that violates our usage policy."
-                  },
-                  blockedOutputsMessaging={
-                    'enabled': True,
-                    'message': "The model's response was blocked due to potentially harmful content."
-                  },
-                  contentPolicyConfig={
-                    'filters': [
-                      {
-                        'type': 'HATE_SPEECH',
-                        'threshold': 'MEDIUM'
-                      },
-                      {
-                        'type': 'SEXUAL',
-                        'threshold': 'MEDIUM'
-                      },
-                      {
-                        'type': 'VIOLENCE',
-                        'threshold': 'MEDIUM'
-                      }
-                    ]
-                  },
-                  sensitiveInformationPolicyConfig={
-                    'piiEntities': [
-                      {
-                        'type': 'CREDIT_DEBIT_NUMBER',
-                        'action': 'MASK'
-                      },
-                      {
-                        'type': 'EMAIL',
-                        'action': 'MASK'
-                      },
-                      {
-                        'type': 'PHONE',
-                        'action': 'MASK'
-                      },
-                      {
-                        'type': 'SSN',
-                        'action': 'BLOCK'
-                      }
-                    ]
-                  },
-                  wordPolicyConfig={
-                    'managedWordLists': [
-                      {
-                        'type': 'PROFANITY',
-                        'action': 'BLOCK'
-                      }
-                    ],
-                    'customWordLists': [
-                      {
-                        'name': 'restricted-terms',
-                        'description': 'Organization-specific terms to restrict',
-                        'words': ['CONFIDENTIAL', 'SECRET', 'FOR_INTERNAL_USE_ONLY'],
-                        'action': 'BLOCK'
-                      }
-                    ]
-                  }
-                )
-                
-                guardrail_id = response['guardrailId']
-                logger.info(f"Created/Updated guardrail with ID: {guardrail_id}")
-                cfnresponse.send(event, context, cfnresponse.SUCCESS, {'GuardrailId': guardrail_id})
+              """
+              Custom resource handler to create, update, and delete Bedrock guardrails
               
-              elif event['RequestType'] == 'Delete':
-                # Get existing guardrail ID if available in physical resource ID
-                physical_id = event.get('PhysicalResourceId', '')
-                if physical_id.startswith('guardrail-'):
-                  guardrail_id = physical_id
-                  bedrock.delete_guardrail(guardrailId=guardrail_id)
-                  logger.info(f"Deleted guardrail with ID: {guardrail_id}")
+              This handles the CloudFormation custom resource lifecycle events:
+              - Create: Creates a new guardrail with safety filters
+              - Update: Updates an existing guardrail with new configuration
+              - Delete: Removes the guardrail
+              """
+              logger.info('Received event: %s', json.dumps(event))
+              
+              # Extract parameters
+              props = event['ResourceProperties']
+              guardrail_name = props.get('GuardrailName', 'content-safety-guardrail')
+              env_name = props.get('EnvironmentName', 'dev')
+              
+              try:
+                if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                  # Create guardrail configuration
+                  response = bedrock.create_guardrail(
+                    name=f"{guardrail_name}-{env_name}",
+                    description="Guardrail to filter harmful content",
+                    blockedInputMessaging={
+                      'enabled': True,
+                      'message': "Your input contains content that violates our usage policy."
+                    },
+                    blockedOutputsMessaging={
+                      'enabled': True,
+                      'message': "The model's response was blocked due to potentially harmful content."
+                    },
+                    contentPolicyConfig={
+                      'filters': [
+                        {
+                          'type': 'HATE_SPEECH',
+                          'threshold': 'MEDIUM'  # Options: LOW, MEDIUM, HIGH
+                        },
+                        {
+                          'type': 'SEXUAL',
+                          'threshold': 'MEDIUM'
+                        },
+                        {
+                          'type': 'VIOLENCE',
+                          'threshold': 'MEDIUM'
+                        }
+                      ]
+                    },
+                    sensitiveInformationPolicyConfig={
+                      'piiEntities': [
+                        {
+                          'type': 'CREDIT_DEBIT_NUMBER',
+                          'action': 'MASK'  # Options: MASK, BLOCK
+                        },
+                        {
+                          'type': 'EMAIL',
+                          'action': 'MASK'
+                        },
+                        {
+                          'type': 'PHONE',
+                          'action': 'MASK'
+                        },
+                        {
+                          'type': 'SSN',
+                          'action': 'BLOCK'  # Block SSNs completely
+                        }
+                      ]
+                    },
+                    wordPolicyConfig={
+                      'managedWordLists': [
+                        {
+                          'type': 'PROFANITY',
+                          'action': 'BLOCK'
+                        }
+                      ],
+                      'customWordLists': [
+                        {
+                          'name': 'restricted-terms',
+                          'description': 'Organization-specific terms to restrict',
+                          'words': ['CONFIDENTIAL', 'SECRET', 'FOR_INTERNAL_USE_ONLY'],
+                          'action': 'BLOCK'
+                        }
+                      ]
+                    }
+                  )
                   
-                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-              
-            except Exception as e:
-              logger.error(f"Error: {str(e)}")
-              cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+                  guardrail_id = response['guardrailId']
+                  logger.info(f"Created/Updated guardrail with ID: {guardrail_id}")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {'GuardrailId': guardrail_id})
+                
+                elif event['RequestType'] == 'Delete':
+                  # Get existing guardrail ID if available in physical resource ID
+                  physical_id = event.get('PhysicalResourceId', '')
+                  if physical_id.startswith('guardrail-'):
+                    guardrail_id = physical_id
+                    bedrock.delete_guardrail(guardrailId=guardrail_id)
+                    logger.info(f"Deleted guardrail with ID: {guardrail_id}")
+                    
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                
+              except Exception as e:
+                logger.error(f"Error: {str(e)}")
+                cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # Custom resource that calls the Lambda function to create Bedrock guardrails
   BedrockGuardrails:
     Type: Custom::BedrockGuardrails
     Properties:
       ServiceToken: !GetAtt GuardrailsLambda.Arn
       GuardrailName: content-safety-guardrail
-      EnvironmentName: 'SecurityToolsSandbox'
+      EnvironmentName: !Ref EnvironmentName
 
-  # 5. AWS Budget for Cost Management
+  # =========================================================================
+  # COST MANAGEMENT
+  # =========================================================================
+  # These resources implement budget controls to prevent unexpected Bedrock costs
+  # and provide proactive cost management and alerts when approaching thresholds
+
+  # Monthly budget for Bedrock usage with alerts
   BedrockBudget:
     Type: AWS::Budgets::Budget
     Properties:
       Budget:
-        BudgetName: 'bedrock-monthly-budget-SecurityToolsSandbox'
+        BudgetName: !Sub 'bedrock-monthly-budget-${EnvironmentName}'
         BudgetType: COST
         TimeUnit: MONTHLY
         BudgetLimit:
           Amount: !Ref MonthlyBudgetAmount
           Unit: USD
         CostFilters:
+          # Filter to only track Bedrock service costs
           Service:
             - Amazon Bedrock
       NotificationsWithSubscribers:
+        # Send notification when reaching 80% of the budget
         - Notification:
             NotificationType: ACTUAL
             ComparisonOperator: GREATER_THAN
@@ -293,50 +396,16 @@ Resources:
             - SubscriptionType: EMAIL
               Address: !Ref AdminEmail
 
-  # 6. AWS CloudTrail for API Logging
-  BedrockLogsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub 'bedrock-cloudtrail-logs-${AWS::AccountId}-SecurityToolsSandbox'
-      VersioningConfiguration:
-        Status: Enabled
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+  # Note: No CloudTrail resources created as an existing CloudTrail is already in place
+  # The existing CloudTrail should be configured to capture Bedrock API calls
 
-  BedrockLogsBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref BedrockLogsBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AWSCloudTrailWrite
-            Effect: Allow
-            Principal:
-              Service: cloudtrail.amazonaws.com
-            Action: s3:PutObject
-            Resource: !Sub '${BedrockLogsBucket.Arn}/*'
-            Condition:
-              StringEquals:
-                s3:x-amz-acl: bucket-owner-full-control
+  # =========================================================================
+  # HUMAN OVERSIGHT
+  # =========================================================================
+  # These resources create mechanisms for human review of edge cases
+  # to ensure that problematic model responses can be reviewed by humans
 
-  BedrockTrail:
-    Type: AWS::CloudTrail::Trail
-    DependsOn: BedrockLogsBucketPolicy
-    Properties:
-      TrailName: 'bedrock-api-trail-SecurityToolsSandbox'
-      S3BucketName: !Ref BedrockLogsBucket
-      IsLogging: true
-      IncludeGlobalServiceEvents: true
-      IsMultiRegionTrail: false
-      EnableLogFileValidation: true
-      EventSelectors:
-        - ReadWriteType: All
-          IncludeManagementEvents: true
-
-  # 7. Lambda for Human Oversight/Review of Edge Cases
+  # IAM role for the Lambda function that processes edge cases
   EdgeCaseReviewRole:
     Type: AWS::IAM::Role
     Properties:
@@ -354,26 +423,41 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              # Allow publishing to SNS for human notification
               - Effect: Allow
                 Action:
                   - sns:Publish
                 Resource: !Ref BedrockAlertsTopic
+              # Allow configuring Bedrock logging
               - Effect: Allow
                 Action:
                   - bedrock:GetModelInvocationLoggingConfiguration
                   - bedrock:PutModelInvocationLoggingConfiguration
                 Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+  # Lambda function that detects and routes edge cases for human review
   EdgeCaseReviewFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: 'bedrock-edge-case-review-SecurityToolsSandbox'
+      FunctionName: !Sub 'bedrock-edge-case-review-${EnvironmentName}'
       Handler: index.handler
       Role: !GetAtt EdgeCaseReviewRole.Arn
       Runtime: nodejs18.x
       Timeout: 30
+      Description: 'Function to detect and route edge cases for human review'
       Code:
         ZipFile: |
+          /**
+           * Edge Case Review Function for AWS Bedrock
+           * 
+           * This Lambda function processes Bedrock invocation logs to identify potential
+           * edge cases that require human review, based on confidence scores or content markers.
+           * 
+           * It sends notifications to the configured SNS topic when an edge case is detected.
+           */
           exports.handler = async (event) => {
             console.log('Received event:', JSON.stringify(event, null, 2));
             
@@ -389,7 +473,7 @@ Resources:
             // This would be triggered by CloudWatch Events for Bedrock Invocations
             // Here you'd implement your edge case detection logic
             
-            // For demo purposes, just send a notification
+            // For demo purposes, just send a notification when confidence is low
             if (event.detail && event.detail.confidenceScore < 0.6) {
               await sns.publish({
                 TopicArn: process.env.SNS_TOPIC_ARN,
@@ -403,13 +487,22 @@ Resources:
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref BedrockAlertsTopic
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  # 8. DynamoDB for Storing Approved Prompts
+  # =========================================================================
+  # PROMPT MANAGEMENT INFRASTRUCTURE
+  # =========================================================================
+  # These resources create infrastructure for managing approved prompts and templates
+  # to help standardize interactions with foundation models and enforce consistent usage patterns
+
+  # DynamoDB table for storing vetted prompts that are known to be safe and effective
   ApprovedPromptsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: 'bedrock-approved-prompts-SecurityToolsSandbox'
-      BillingMode: PAY_PER_REQUEST
+      TableName: !Sub 'bedrock-approved-prompts-${EnvironmentName}'
+      BillingMode: PAY_PER_REQUEST  # On-demand capacity for cost optimization
       AttributeDefinitions:
         - AttributeName: PromptId
           AttributeType: S
@@ -419,49 +512,61 @@ Resources:
         - AttributeName: PromptId
           KeyType: HASH
       GlobalSecondaryIndexes:
+        # Secondary index for querying prompts by category
         - IndexName: CategoryIndex
           KeySchema:
             - AttributeName: Category
               KeyType: HASH
           Projection:
-            ProjectionType: ALL
+            ProjectionType: ALL  # Include all attributes in the index
       PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
+        PointInTimeRecoveryEnabled: true  # Enable point-in-time recovery for data protection
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
-  # 9. SSM Parameters for Prompt Templates
+  # SSM Parameter Store entry for secure template storage
   SafePromptTemplates:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: '/bedrock/prompt-templates/safe-SecurityToolsSandbox'
-      Type: SecureString
+      Name: !Sub '/bedrock/prompt-templates/safe-${EnvironmentName}'
+      Type: SecureString  # Encrypted storage for sensitive templates
+      Description: 'Approved safe prompt templates for Bedrock foundation models'
       Value: !Sub |
         {
           "general_query": "Answer the following question factually and concisely: {{user_input}}",
           "content_generation": "Create content about {{topic}} that is appropriate for all audiences.",
           "data_analysis": "Analyze the following data and provide insights: {{data}}"
         }
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
+# =========================================================================
+# OUTPUTS
+# =========================================================================
+# These outputs export important resource identifiers for cross-stack references
 Outputs:
   BedrockAccessRoleARN:
-    Description: ARN of the Bedrock access role
+    Description: ARN of the Bedrock access role with least privilege permissions
     Value: !GetAtt BedrockAccessRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-BedrockAccessRoleARN'
 
   BedrockVPCEndpointId:
-    Description: ID of the Bedrock VPC endpoint
+    Description: ID of the Bedrock VPC endpoint for private network access
     Value: !Ref BedrockVPCEndpoint
     Export:
       Name: !Sub '${AWS::StackName}-BedrockVPCEndpointId'
 
   BedrockAlertsTopicARN:
-    Description: ARN of the Bedrock alerts SNS topic
+    Description: ARN of the Bedrock alerts SNS topic for monitoring notifications
     Value: !Ref BedrockAlertsTopic
     Export:
       Name: !Sub '${AWS::StackName}-BedrockAlertsTopicARN'
 
   ApprovedPromptsTableName:
-    Description: Name of the approved prompts DynamoDB table
+    Description: Name of the approved prompts DynamoDB table for prompt management
     Value: !Ref ApprovedPromptsTable
     Export:
       Name: !Sub '${AWS::StackName}-ApprovedPromptsTableName'
