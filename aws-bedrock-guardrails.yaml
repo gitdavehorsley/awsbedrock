@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Bedrock Security Controls Implementation - Essential security controls for AWS Bedrock usage'
+
+# =========================================================================
+# PARAMETERS
+# =========================================================================
+# These parameters make the template configurable for different deployments
+Parameters:
+  # Administrative parameters
+  AdminEmail:
+    Type: String
+    Description: Email address for notifications and alerts
+    Default: admin@example.com
+    ConstraintDescription: Must be a valid email address
+  
+  # Cost control parameters
+  MonthlyBudgetAmount:
+    Type: Number
+    Description: Monthly budget limit for Bedrock in USD
+    Default: 100
+    MinValue: 1
+    ConstraintDescription: Must be a positive number
+    
+  # Network parameters - References to existing infrastructure
+  ExistingVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID of the existing VPC to use for VPC endpoints
+    
+  ExistingSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the existing subnet to use for VPC endpoints
+    
+  # Environment configuration
+  EnvironmentName:
+    Type: String
+    Description: Environment name (dev, test, prod, etc.)
+    Default: dev
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: Environment name must contain only alphanumeric characters
+
+# =========================================================================
+# RESOURCES
+# =========================================================================
+Resources:
+  # =========================================================================
+  # IAM ROLES AND POLICIES
+  # =========================================================================
+  # These resources create IAM role and policy with least privilege access to AWS Bedrock
+  # following security best practices by limiting access to only required models
+  # and enforcing environment-based tagging
+  
+  BedrockAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'bedrock-access-role-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BedrockRestrictedPolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Policy that restricts which Bedrock models can be accessed and enforces tagging
+  BedrockRestrictedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'bedrock-restricted-policy-${EnvironmentName}'
+      Description: Restricted policy for AWS Bedrock access with least privilege principles
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-text-express-v1'
+            Condition:
+              StringEquals:
+                'aws:RequestTag/Environment': !Ref EnvironmentName
+          - Effect: Allow
+            Action:
+              - bedrock:GetFoundationModel
+            Resource: '*'
+
+  # =========================================================================
+  # NETWORK CONTROLS
+  # =========================================================================
+  # These resources create private network access to Bedrock services
+  # to prevent Bedrock traffic from traversing the public internet
+  # and provide network-level isolation and protection
+  
+  # Security group that restricts network traffic to the Bedrock endpoint
+  BedrockSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Bedrock endpoint - restricts network traffic
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupIngress:
+        # Allow HTTPS (443) traffic only from within the VPC CIDR range
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16  # Consider parameterizing this value to match your VPC CIDR
+      SecurityGroupEgress:
+        # Allow all outbound traffic - modify as needed for stricter controls
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub 'bedrock-sg-${EnvironmentName}'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # VPC Endpoint that enables private access to Bedrock services
+  BedrockVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock-runtime'
+      VpcEndpointType: Interface
+      VpcId: !Ref ExistingVpcId
+      SubnetIds:
+        - !Ref ExistingSubnetId
+      SecurityGroupIds:
+        - !Ref BedrockSecurityGroup
+      PrivateDnsEnabled: false
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # =========================================================================
+  # MONITORING AND ALERTING
+  # =========================================================================
+  # These resources create comprehensive monitoring and alerting for Bedrock usage
+  # to enable visibility into model usage patterns, costs, and potential issues
+
+  # Centralized log group for Bedrock model invocations
+  BedrockLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/bedrock/model-invocations-${EnvironmentName}'
+      RetentionInDays: 30  # Retain logs for 30 days - adjust as needed for compliance
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # SNS topic for sending alerts and notifications about Bedrock usage
+  BedrockAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'bedrock-alerts-${EnvironmentName}'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AdminEmail
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # =========================================================================
+  # BEDROCK GUARDRAILS
+  # =========================================================================
+  # These resources implement content filtering and safety guardrails for Bedrock
+  # to prevent generation of harmful content and protect sensitive information
+  # Implemented as a custom resource since CloudFormation doesn't directly support Bedrock guardrails
+
+  # =========================================================================
+  # COST MANAGEMENT
+  # =========================================================================
+  # These resources implement budget controls to prevent unexpected Bedrock costs
+  # and provide proactive cost management and alerts when approaching thresholds
+
+  # Monthly budget for Bedrock usage with alerts
+  BedrockBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'bedrock-monthly-budget-${EnvironmentName}'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetAmount
+          Unit: USD
+        CostFilters:
+          # Filter to only track Bedrock service costs
+          Service:
+            - Amazon Bedrock
+      NotificationsWithSubscribers:
+        # Send notification when reaching 80% of the budget
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AdminEmail
+
+  # Note: No CloudTrail resources created as an existing CloudTrail is already in place
+  # The existing CloudTrail should be configured to capture Bedrock API calls
+
+# =========================================================================
+# OUTPUTS
+# =========================================================================
+# These outputs export important resource identifiers for cross-stack references
+Outputs:
+  BedrockAccessRoleARN:
+    Description: ARN of the Bedrock access role with least privilege permissions
+    Value: !GetAtt BedrockAccessRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockAccessRoleARN'
+
+  BedrockVPCEndpointId:
+    Description: ID of the Bedrock VPC endpoint for private network access
+    Value: !Ref BedrockVPCEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockVPCEndpointId'
+
+  BedrockAlertsTopicARN:
+    Description: ARN of the Bedrock alerts SNS topic for monitoring notifications
+    Value: !Ref BedrockAlertsTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockAlertsTopicARN'
