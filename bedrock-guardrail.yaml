@@ -20,8 +20,8 @@ Resources:
     Properties:
       Name: !Ref GuardrailName
       Description: 'Basic security guardrails for Bedrock'
-      BlockedInputMessaging: "Your input contains content that violates our usage policies. Please revise and try again."
-      BlockedOutputsMessaging: "The generated response contains content that violates our usage policies."
+      BlockedInputMessaging: "Your input has been blocked by our content safety guardrails. Please ensure your request does not contain hate speech, profanity, or restricted terms. If you believe this is an error, try rephrasing your request in a more appropriate way."
+      BlockedOutputsMessaging: "The model's response has been blocked by our content safety guardrails as it may contain inappropriate content. This helps ensure all responses align with our content policies and ethical guidelines."
       
       ContentPolicyConfig:
         FiltersConfig:
