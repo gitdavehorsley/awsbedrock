@@ -16,6 +16,7 @@ The security controls are implemented in two layers:
    - CloudWatch logging for monitoring
    - SNS notifications for alerts
    - Budget controls for cost management
+   - Native Bedrock guardrails for content filtering and security
 
 ## Prerequisites
 
@@ -28,6 +29,7 @@ The security controls are implemented in two layers:
   - CloudWatch Log Groups
   - SNS Topics
   - AWS Budgets
+  - Bedrock Guardrails
 
 ## Deployment
 
@@ -65,6 +67,7 @@ aws cloudformation create-stack \
     ParameterKey=MonthlyBudgetAmount,ParameterValue=<budget-amount> \
     ParameterKey=EnvironmentName,ParameterValue=<environment> \
     ParameterKey=NetworkStackName,ParameterValue=bedrock-network \
+    ParameterKey=GuardrailName,ParameterValue=<guardrail-name> \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -72,6 +75,7 @@ Replace the following values:
 - `<your-email>`: Email address for notifications
 - `<budget-amount>`: Monthly budget limit in USD
 - `<environment>`: Environment name (same as network stack)
+- `<guardrail-name>`: Name for the Bedrock guardrail (defaults to bedrock-guardrail-{environment})
 
 ## Template Details
 
@@ -96,6 +100,11 @@ This template creates:
 - CloudWatch log group for model invocations
 - SNS topic for alerts and notifications
 - Budget controls with email notifications
+- Native Bedrock guardrails with:
+  - Input content filtering
+  - Blocked terms and categories
+  - Security and privacy controls
+  - Prevention policies for harmful content
 
 ## Outputs
 
@@ -107,6 +116,8 @@ This template creates:
 ### Controls Stack Outputs
 - `BedrockAccessRoleARN`: ARN of the Bedrock access role
 - `BedrockAlertsTopicARN`: ARN of the SNS topic for alerts
+- `BedrockGuardrailId`: ID of the created Bedrock guardrail
+- `BedrockGuardrailVersionId`: ID of the active guardrail version
 
 ## Security Considerations
 
@@ -118,8 +129,15 @@ This template creates:
    - Least privilege IAM permissions
    - Environment-based access control
    - Limited to specific foundation models
+   - Content filtering guardrails
 
-3. **Monitoring and Alerting**
+3. **Content Security**
+   - Input filtering for sensitive terms
+   - Blocked categories (hate speech, profanity, etc.)
+   - Prevention of malicious code generation
+   - Protection against LLM jailbreaking
+
+4. **Monitoring and Alerting**
    - CloudWatch logging for audit trail
    - SNS notifications for important events
    - Budget alerts for cost control
@@ -148,7 +166,12 @@ This template creates:
    - Check policy permissions
    - Validate environment tags
 
-3. **Budget/Alerting Issues**
+3. **Guardrail Issues**
+   - Verify guardrail activation status
+   - Check blocked terms and categories
+   - Review prevention policies
+
+4. **Budget/Alerting Issues**
    - Confirm SNS topic subscriptions
    - Verify email addresses
    - Check CloudWatch logs
