@@ -26,6 +26,13 @@ Parameters:
     Description: Name of the network infrastructure stack
     ConstraintDescription: Must be the name of an existing CloudFormation stack
 
+  GuardrailName:
+    Type: String
+    Description: Name of the Bedrock guardrail
+    Default: !Sub 'bedrock-guardrail-${EnvironmentName}'
+    AllowedPattern: "[a-zA-Z0-9-]+"
+    ConstraintDescription: Guardrail name must contain only alphanumeric characters and hyphens
+
 Resources:
   BedrockAccessRole:
     Type: AWS::IAM::Role
@@ -110,6 +117,53 @@ Resources:
             - SubscriptionType: EMAIL
               Address: !Ref AdminEmail
 
+  # =========================================================================
+  # BEDROCK GUARDRAILS
+  # =========================================================================
+  BedrockGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Ref GuardrailName
+      GuardrailType: INPUT_FILTERING
+      Active: true
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BedrockGuardrailVersion:
+    Type: AWS::Bedrock::GuardrailVersion
+    Properties:
+      GuardrailId: !Ref BedrockGuardrail
+      GuardrailVersion: '1.0'
+      GuardrailPolicy:
+        PrincipleTypes:
+          - SECURITY
+          - ETHICS
+          - PRIVACY
+        BlockedTerms:
+          - hack
+          - exploit
+          - vulnerability
+          - malware
+          - confidential
+          - password
+          - credit card
+          - ssn
+          - social security
+        BlockedCategories:
+          - HATE_SPEECH
+          - SEXUAL_CONTENT
+          - PROFANITY
+          - VIOLENCE
+        BlockedIntents:
+          - GENERATE_CODE_MALWARE
+          - GENERATE_CODE_EXPLOIT
+          - DISCLOSE_SENSITIVE_INFO
+          - JAILBREAK_LLM
+        PreventionPolicy: BLOCK
+        RiskLevel: HIGH
+        Description: 'Security and privacy guardrails for Bedrock model invocations'
+
 Outputs:
   BedrockAccessRoleARN:
     Description: ARN of the Bedrock access role with least privilege permissions
@@ -121,4 +175,16 @@ Outputs:
     Description: ARN of the Bedrock alerts SNS topic for monitoring notifications
     Value: !Ref BedrockAlertsTopic
     Export:
-      Name: !Sub '${AWS::StackName}-BedrockAlertsTopicARN' 
+      Name: !Sub '${AWS::StackName}-BedrockAlertsTopicARN'
+
+  BedrockGuardrailId:
+    Description: ID of the Bedrock guardrail
+    Value: !Ref BedrockGuardrail
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailId'
+
+  BedrockGuardrailVersionId:
+    Description: ID of the active Bedrock guardrail version
+    Value: !Ref BedrockGuardrailVersion
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailVersionId' 
