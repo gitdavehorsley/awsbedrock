@@ -1,17 +1,17 @@
 # AWS Bedrock Security Controls
 
-This repository contains CloudFormation templates that implement comprehensive security controls for AWS Bedrock. The implementation is split into two templates for better modularity and separation of concerns.
+This repository contains a comprehensive CloudFormation template that implements security controls for AWS Bedrock, including network infrastructure, IAM roles, monitoring, and native guardrails.
 
 ## Architecture Overview
 
-The security controls are implemented in two layers:
+The security controls are implemented in a single template with multiple components:
 
-1. **Network Infrastructure** (`bedrock-network.yaml`)
+1. **Network Infrastructure**
    - VPC Endpoint for private Bedrock access
    - Security Group with restricted network traffic
    - DNS configuration for VPC endpoint
 
-2. **Security Controls** (`bedrock-controls.yaml`)
+2. **Security Controls**
    - IAM roles and policies with least privilege access
    - CloudWatch logging for monitoring
    - SNS notifications for alerts
@@ -33,91 +33,75 @@ The security controls are implemented in two layers:
 
 ## Deployment
 
-### Step 1: Deploy Network Infrastructure
-
-First, deploy the network infrastructure that enables private access to Bedrock:
+Deploy the complete stack using the following command:
 
 ```bash
 aws cloudformation create-stack \
-  --stack-name bedrock-network \
-  --template-body file://bedrock-network.yaml \
+  --stack-name bedrock-security \
+  --template-body file://aws-bedrock-guardrails.yaml \
   --parameters \
     ParameterKey=ExistingVpcId,ParameterValue=<your-vpc-id> \
     ParameterKey=ExistingSubnetId,ParameterValue=<your-subnet-id> \
-    ParameterKey=EnvironmentName,ParameterValue=<environment> \
-    ParameterKey=VpcCidr,ParameterValue=<vpc-cidr>
-```
-
-Replace the following values:
-- `<your-vpc-id>`: ID of your existing VPC
-- `<your-subnet-id>`: ID of your existing subnet
-- `<environment>`: Environment name (e.g., dev, test, prod)
-- `<vpc-cidr>`: CIDR range for VPC ingress rule (e.g., 10.0.0.0/16)
-
-### Step 2: Deploy Security Controls
-
-Once the network infrastructure is deployed, deploy the security controls:
-
-```bash
-aws cloudformation create-stack \
-  --stack-name bedrock-controls \
-  --template-body file://bedrock-controls.yaml \
-  --parameters \
+    ParameterKey=VpcCidr,ParameterValue=<vpc-cidr> \
     ParameterKey=AdminEmail,ParameterValue=<your-email> \
     ParameterKey=MonthlyBudgetAmount,ParameterValue=<budget-amount> \
     ParameterKey=EnvironmentName,ParameterValue=<environment> \
-    ParameterKey=NetworkStackName,ParameterValue=bedrock-network \
     ParameterKey=GuardrailName,ParameterValue=<guardrail-name> \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
 Replace the following values:
+- `<your-vpc-id>`: ID of your existing VPC
+- `<your-subnet-id>`: ID of your existing subnet
+- `<vpc-cidr>`: CIDR range for VPC ingress rule (e.g., 10.0.0.0/16)
 - `<your-email>`: Email address for notifications
 - `<budget-amount>`: Monthly budget limit in USD
-- `<environment>`: Environment name (same as network stack)
+- `<environment>`: Environment name (e.g., dev, test, prod)
 - `<guardrail-name>`: Name for the Bedrock guardrail (defaults to bedrock-guardrail-{environment})
 
 ## Template Details
 
-### Network Infrastructure Template (`bedrock-network.yaml`)
+The template (`aws-bedrock-guardrails.yaml`) creates:
 
-This template creates:
-- Security group for Bedrock endpoint with:
-  - Inbound access on port 443 from VPC CIDR
-  - All outbound access allowed
-- VPC Endpoint for Bedrock runtime with:
-  - Interface endpoint type
-  - Private DNS disabled (to avoid conflicts)
-  - Placement in specified subnet
+1. **Network Infrastructure**
+   - Security group for Bedrock endpoint with:
+     - Inbound access on port 443 from VPC CIDR
+     - All outbound access allowed
+   - VPC Endpoint for Bedrock runtime with:
+     - Interface endpoint type
+     - Private DNS disabled (to avoid conflicts)
+     - Placement in specified subnet
 
-### Security Controls Template (`bedrock-controls.yaml`)
+2. **IAM and Security Controls**
+   - IAM role and policy for Bedrock access with:
+     - Least privilege permissions
+     - Access to specific foundation models
+     - Environment-based access control
+   - CloudWatch log group for model invocations
+   - SNS topic for alerts and notifications
+   - Budget controls with email notifications
 
-This template creates:
-- IAM role and policy for Bedrock access with:
-  - Least privilege permissions
-  - Access to specific foundation models
-  - Environment-based access control
-- CloudWatch log group for model invocations
-- SNS topic for alerts and notifications
-- Budget controls with email notifications
-- Native Bedrock guardrails with:
-  - Input content filtering
-  - Blocked terms and categories
-  - Security and privacy controls
-  - Prevention policies for harmful content
+3. **Bedrock Guardrails**
+   - Input filtering guardrails with:
+     - Blocked sensitive terms
+     - Content categories filtering
+     - Security and privacy controls
+     - Prevention policies for harmful content
 
 ## Outputs
 
-### Network Stack Outputs
-- `BedrockSecurityGroupId`: ID of the created security group
-- `BedrockVPCEndpointId`: ID of the VPC endpoint
-- `BedrockVPCEndpointDNS`: DNS entries for the VPC endpoint
+The template provides the following outputs:
 
-### Controls Stack Outputs
-- `BedrockAccessRoleARN`: ARN of the Bedrock access role
-- `BedrockAlertsTopicARN`: ARN of the SNS topic for alerts
-- `BedrockGuardrailId`: ID of the created Bedrock guardrail
-- `BedrockGuardrailVersionId`: ID of the active guardrail version
+1. **Network Outputs**
+   - `BedrockSecurityGroupId`: ID of the created security group
+   - `BedrockVPCEndpointId`: ID of the VPC endpoint
+   - `BedrockVPCEndpointDNS`: DNS entries for the VPC endpoint
+
+2. **Security Controls Outputs**
+   - `BedrockAccessRoleARN`: ARN of the Bedrock access role
+   - `BedrockAlertsTopicARN`: ARN of the SNS topic for alerts
+   - `BedrockGuardrailId`: ID of the created Bedrock guardrail
+   - `BedrockGuardrailVersionId`: ID of the active guardrail version
 
 ## Security Considerations
 
@@ -144,10 +128,10 @@ This template creates:
 
 ## Maintenance
 
-1. **Updating Templates**
+1. **Updating Template**
    - Use CloudFormation change sets to preview changes
-   - Update network and controls stacks independently
    - Test changes in non-production environment first
+   - Monitor stack events during updates
 
 2. **Monitoring**
    - Review CloudWatch logs regularly
