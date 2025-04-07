@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Bedrock Guardrail Configuration'
+
+Parameters:
+  GuardrailName:
+    Type: String
+    Description: Name of the Bedrock guardrail
+    AllowedPattern: "[a-zA-Z0-9-]+"
+    ConstraintDescription: Guardrail name must contain only alphanumeric characters and hyphens
+
+  EnvironmentName:
+    Type: String
+    Description: Environment name (dev, test, prod, etc.)
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: Environment name must contain only alphanumeric characters
+
+Resources:
+  BedrockGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Ref GuardrailName
+      Description: 'Basic security guardrails for Bedrock'
+      BlockedInputMessaging: "Your input contains content that violates our usage policies. Please revise and try again."
+      BlockedOutputsMessaging: "The generated response contains content that violates our usage policies."
+      
+      ContentPolicyConfig:
+        FiltersConfig:
+          - Type: HATE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+            InputModalities:
+              - TEXT
+            OutputModalities:
+              - TEXT
+      
+      WordPolicyConfig:
+        ManagedWordListsConfig:
+          - Type: PROFANITY
+        WordsConfig:
+          - Text: "hack"
+          - Text: "exploit"
+      
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+Outputs:
+  GuardrailId:
+    Description: ID of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.GuardrailId
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailId'
+
+  GuardrailArn:
+    Description: ARN of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.GuardrailArn
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailArn'
+
+  GuardrailStatus:
+    Description: Status of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.Status
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailStatus'
+
+  CreatedAt:
+    Description: Creation timestamp of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.CreatedAt
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailCreatedAt'
+
+  Version:
+    Description: Version of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.Version
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailVersion' 
