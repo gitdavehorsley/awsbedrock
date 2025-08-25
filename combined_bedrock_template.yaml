@@ -324,9 +324,9 @@ Resources:
           - Type: ADDRESS
             Action: BLOCK
           - Type: NAME
-            Action: MASK
+            Action: ANONYMIZE
           - Type: AGE
-            Action: MASK
+            Action: ANONYMIZE
         RegexesConfig:
           - Name: "API_KEYS"
             Description: "Block API keys and tokens"
