@@ -317,10 +317,16 @@ Resources:
             Action: BLOCK
           - Type: PHONE
             Action: BLOCK
-          - Type: SSN
+          - Type: US_SOCIAL_SECURITY_NUMBER
             Action: BLOCK
           - Type: CREDIT_DEBIT_CARD_NUMBER
             Action: BLOCK
+          - Type: ADDRESS
+            Action: BLOCK
+          - Type: NAME
+            Action: MASK
+          - Type: AGE
+            Action: MASK
         RegexesConfig:
           - Name: "API_KEYS"
             Description: "Block API keys and tokens"
