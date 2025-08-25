@@ -1,0 +1,409 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Bedrock Complete Security Controls - Network Infrastructure, IAM, Monitoring, Alerting, Cost Management, and Guardrails'
+
+# =========================================================================
+# PARAMETERS
+# =========================================================================
+Parameters:
+  # Network parameters
+  ExistingVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID of the existing VPC to use for VPC endpoints
+    
+  ExistingSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the existing subnet to use for VPC endpoints
+    
+  VpcCidr:
+    Type: String
+    Description: CIDR range for VPC ingress rule
+    Default: "10.0.0.0/16"
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+    ConstraintDescription: Must be a valid CIDR range
+
+  # Administrative parameters
+  AdminEmail:
+    Type: String
+    Description: Email address for notifications and alerts
+    ConstraintDescription: Must be a valid email address
+  
+  MonthlyBudgetAmount:
+    Type: Number
+    Description: Monthly budget limit for Bedrock in USD
+    Default: "100"
+    MinValue: 1
+    ConstraintDescription: Must be a positive number
+    
+  EnvironmentName:
+    Type: String
+    Description: Environment name (dev, test, prod, etc.)
+    Default: "dev"
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: Environment name must contain only alphanumeric characters
+
+  GuardrailName:
+    Type: String
+    Description: Name of the Bedrock guardrail
+    Default: "bedrock-guardrail"
+    AllowedPattern: "[a-zA-Z0-9-]+"
+    ConstraintDescription: Guardrail name must contain only alphanumeric characters and hyphens
+
+# =========================================================================
+# RESOURCES
+# =========================================================================
+Resources:
+  # =========================================================================
+  # NETWORK INFRASTRUCTURE
+  # =========================================================================
+  BedrockSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Bedrock endpoint - restricts network traffic
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+          Description: Allow HTTPS traffic from VPC CIDR
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub 'bedrock-sg-${EnvironmentName}'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Bedrock VPC Endpoint Security'
+
+  BedrockVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock-runtime'
+      VpcEndpointType: Interface
+      VpcId: !Ref ExistingVpcId
+      SubnetIds:
+        - !Ref ExistingSubnetId
+      SecurityGroupIds:
+        - !Ref BedrockSecurityGroup
+      PrivateDnsEnabled: false
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:GetFoundationModel
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'aws:PrincipalTag/Environment': !Ref EnvironmentName
+      Tags:
+        - Key: Name
+          Value: !Sub 'bedrock-vpc-endpoint-${EnvironmentName}'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Private Bedrock Access'
+
+  # =========================================================================
+  # IAM ROLES AND POLICIES
+  # =========================================================================
+  BedrockAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'bedrock-access-role-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+                - ec2.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'aws:PrincipalTag/Environment': !Ref EnvironmentName
+      ManagedPolicyArns:
+        - !Ref BedrockRestrictedPolicy
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Bedrock Access with Least Privilege'
+
+  BedrockRestrictedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'bedrock-restricted-policy-${EnvironmentName}'
+      Description: Restricted policy for AWS Bedrock access with least privilege principles
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-text-express-v1'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
+            Condition:
+              StringEquals:
+                'aws:RequestedRegion': !Ref 'AWS::Region'
+              StringLike:
+                'aws:userid': !Sub '*:*-${EnvironmentName}'
+          - Effect: Allow
+            Action:
+              - bedrock:GetFoundationModel
+              - bedrock:ListFoundationModels
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - bedrock:GetGuardrail
+              - bedrock:ApplyGuardrail
+            Resource: !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock/*'
+
+  # =========================================================================
+  # MONITORING AND ALERTING
+  # =========================================================================
+  BedrockLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/bedrock/model-invocations-${EnvironmentName}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Bedrock Model Invocation Logging'
+
+  BedrockAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'bedrock-alerts-${EnvironmentName}'
+      DisplayName: !Sub 'Bedrock Alerts - ${EnvironmentName}'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AdminEmail
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Bedrock Monitoring Alerts'
+
+  # CloudWatch Alarm for high API usage
+  BedrockHighUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'bedrock-high-usage-${EnvironmentName}'
+      AlarmDescription: 'Alarm when Bedrock API calls exceed threshold'
+      MetricName: 'Invocations'
+      Namespace: 'AWS/Bedrock'
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref BedrockAlertsTopic
+      Dimensions:
+        - Name: ModelId
+          Value: 'anthropic.claude-3-sonnet-20240229-v1:0'
+
+  # =========================================================================
+  # COST MANAGEMENT
+  # =========================================================================
+  BedrockBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'bedrock-monthly-budget-${EnvironmentName}'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetAmount
+          Unit: USD
+        CostFilters:
+          Service:
+            - Amazon Bedrock
+        PlannedBudgetLimits:
+          - BudgetLimit:
+              Amount: !Ref MonthlyBudgetAmount
+              Unit: USD
+            TimePeriod:
+              Start: !Sub '${AWS::AccountId}-01-01'
+              End: !Sub '${AWS::AccountId}-12-31'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+            NotificationState: ALARM
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AdminEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+            NotificationState: ALARM
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AdminEmail
+
+  # =========================================================================
+  # BEDROCK GUARDRAILS
+  # =========================================================================
+  BedrockGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Sub '${GuardrailName}-${EnvironmentName}'
+      Description: !Sub 'Security guardrails for Bedrock in ${EnvironmentName} environment'
+      BlockedInputMessaging: "Your input has been blocked by our content safety guardrails. Please ensure your request does not contain hate speech, profanity, or restricted terms. If you believe this is an error, try rephrasing your request in a more appropriate way."
+      BlockedOutputsMessaging: "The model's response has been blocked by our content safety guardrails as it may contain inappropriate content. This helps ensure all responses align with our content policies and ethical guidelines."
+      
+      ContentPolicyConfig:
+        FiltersConfig:
+          - Type: HATE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: SEXUAL
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: VIOLENCE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: MISCONDUCT
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+      
+      WordPolicyConfig:
+        ManagedWordListsConfig:
+          - Type: PROFANITY
+        WordsConfig:
+          - Text: "hack"
+          - Text: "exploit"
+          - Text: "vulnerability"
+          - Text: "malware"
+          - Text: "confidential"
+          - Text: "password"
+          - Text: "ssn"
+          - Text: "social security"
+      
+      SensitiveInformationPolicyConfig:
+        PiiEntitiesConfig:
+          - Type: EMAIL
+            Action: BLOCK
+          - Type: PHONE
+            Action: BLOCK
+          - Type: SSN
+            Action: BLOCK
+          - Type: CREDIT_DEBIT_CARD_NUMBER
+            Action: BLOCK
+        RegexesConfig:
+          - Name: "API_KEYS"
+            Description: "Block API keys and tokens"
+            Pattern: "(?i)(api[_-]?key|access[_-]?token|secret[_-]?key)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_-]{20,}['\"]?"
+            Action: BLOCK
+      
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Content Safety and Security'
+
+# =========================================================================
+# OUTPUTS
+# =========================================================================
+Outputs:
+  # Network Outputs
+  BedrockSecurityGroupId:
+    Description: ID of the security group created for Bedrock endpoint
+    Value: !Ref BedrockSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockSecurityGroupId'
+
+  BedrockVPCEndpointId:
+    Description: ID of the Bedrock VPC endpoint
+    Value: !Ref BedrockVPCEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockVPCEndpointId'
+
+  BedrockVPCEndpointDNS:
+    Description: DNS entries for the VPC endpoint
+    Value: !Select [0, !GetAtt BedrockVPCEndpoint.DnsEntries]
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockVPCEndpointDNS'
+
+  # Security Controls Outputs
+  BedrockAccessRoleARN:
+    Description: ARN of the Bedrock access role with least privilege permissions
+    Value: !GetAtt BedrockAccessRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockAccessRoleARN'
+
+  BedrockRestrictedPolicyARN:
+    Description: ARN of the Bedrock restricted policy
+    Value: !Ref BedrockRestrictedPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockRestrictedPolicyARN'
+
+  # Monitoring Outputs
+  BedrockAlertsTopicARN:
+    Description: ARN of the Bedrock alerts SNS topic for monitoring notifications
+    Value: !Ref BedrockAlertsTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockAlertsTopicARN'
+
+  BedrockLogGroupName:
+    Description: Name of the CloudWatch log group for Bedrock invocations
+    Value: !Ref BedrockLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockLogGroupName'
+
+  # Guardrail Outputs
+  BedrockGuardrailId:
+    Description: ID of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.GuardrailId
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailId'
+
+  BedrockGuardrailArn:
+    Description: ARN of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.GuardrailArn
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailArn'
+
+  BedrockGuardrailVersion:
+    Description: Version of the Bedrock guardrail
+    Value: !GetAtt BedrockGuardrail.Version
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockGuardrailVersion'
+
+  # Budget Output
+  BedrockBudgetName:
+    Description: Name of the Bedrock budget
+    Value: !Sub 'bedrock-monthly-budget-${EnvironmentName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockBudgetName'
