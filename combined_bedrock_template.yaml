@@ -245,20 +245,12 @@ Resources:
         CostFilters:
           Service:
             - Amazon Bedrock
-        PlannedBudgetLimits:
-          - BudgetLimit:
-              Amount: !Ref MonthlyBudgetAmount
-              Unit: USD
-            TimePeriod:
-              Start: !Sub '${AWS::AccountId}-01-01'
-              End: !Sub '${AWS::AccountId}-12-31'
       NotificationsWithSubscribers:
         - Notification:
             NotificationType: ACTUAL
             ComparisonOperator: GREATER_THAN
             Threshold: 80
             ThresholdType: PERCENTAGE
-            NotificationState: ALARM
           Subscribers:
             - SubscriptionType: EMAIL
               Address: !Ref AdminEmail
@@ -267,7 +259,6 @@ Resources:
             ComparisonOperator: GREATER_THAN
             Threshold: 100
             ThresholdType: PERCENTAGE
-            NotificationState: ALARM
           Subscribers:
             - SubscriptionType: EMAIL
               Address: !Ref AdminEmail
